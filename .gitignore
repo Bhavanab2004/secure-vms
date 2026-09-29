@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Model files
+*.pt
+*.pth
+*.onnx
+*.h5
+*.keras
+
+# Large datasets
+*.csv
+*.zip
+*.tar
+*.tar.gz
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

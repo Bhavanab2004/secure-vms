@@ -1,0 +1,60 @@
+<!doctype html><html><head><meta charset=utf-8><title>Secure VMS</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+body{font:14px system-ui;margin:0;background:#0f172a;color:#e2e8f0}
+header{display:flex;gap:8px;align-items:center;padding:10px 16px;background:#1e293b}header b{margin-right:auto}
+button,select,input{padding:6px 10px;border-radius:6px;border:1px solid #475569;background:#334155;color:#e2e8f0;cursor:pointer}
+main{padding:16px}.tab{display:none}.tab.on{display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
+.card{background:#1e293b;border-radius:10px;padding:12px}img.cam{width:100%;border-radius:8px;background:#000;min-height:120px}
+table{width:100%;border-collapse:collapse}td,th{padding:6px;border-bottom:1px solid #334155;text-align:left;vertical-align:top}
+.Low,.online{color:#4ade80}.Medium{color:#facc15}.High{color:#fb923c}.Critical,.offline{color:#f87171;font-weight:700}
+#toast{position:fixed;right:16px;top:60px;display:flex;flex-direction:column;gap:8px}#toast div{background:#7f1d1d;padding:10px 14px;border-radius:8px}
+</style></head><body>
+<header><b>Secure VMS</b><button onclick="show('live')">Live</button><button onclick="show('inc')">Incidents</button>
+<button onclick="show('ana')">Analytics</button><button onclick="show('cam')">Cameras</button>
+{% if role=='admin' %}<button onclick="show('adm')">Admin</button>{% endif %}<span>{{user}} ({{role}})</span><a href="/logout" style="color:#93c5fd">logout</a></header>
+<div id=toast></div>
+<main>
+<div id=live class="tab on"><div class=grid id=lg></div></div>
+<div id=inc class=tab><table><thead><tr><th>#<th>Time<th>Camera<th>Risk<th>Status<th>Summary<th>Evidence</tr></thead><tbody id=it></tbody></table></div>
+<div id=ana class=tab><p>Open incidents: <b id=op></b> &nbsp; <a href="/api/report" style="color:#93c5fd">Download report (CSV)</a></p>
+<div class=grid><div class=card><canvas id=c1></canvas></div><div class=card><canvas id=c2></canvas></div><div class=card><canvas id=c3></canvas></div>
+<div class=card><b>Camera status</b><div id=cs></div></div></div></div>
+<div id=cam class=tab><div class=card><table id=ct></table>
+<p id=addcam>Add: <input id=n placeholder=Name> <input id=s placeholder="0 | rtsp://... | http://..."> <input id=z placeholder='Zone JSON e.g. [[.1,.1],[.6,.1],[.6,.9],[.1,.9]]' size=40> <button onclick=addCam()>Add camera</button></p>
+<p>Upload video: <input type=file id=f accept="video/*"> <button onclick=up()>Upload</button></p></div></div>
+<div id=adm class=tab><div class=card><b>Users</b><table id=ut></table>
+<input id=un placeholder=username> <input id=up type=password placeholder=password> <select id=ur><option>viewer<option>officer<option>admin</select> <button onclick=addUser()>Add user</button></div>
+<div class=card style="margin-top:12px"><b>Audit log</b><table id=at></table></div></div>
+</main>
+<script>
+const $=s=>document.querySelector(s),J=(u,o)=>fetch(u,o).then(r=>r.json()),R="{{role}}",T=t=>new Date(t*1000).toLocaleString();
+const post=(u,b,m='POST')=>J(u,{method:m,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+let seen=null,cur='live',ch={};
+const L={
+ async live(){const c=await J('/api/cameras');const k=c.map(x=>x.id).join();if($('#lg').dataset.k===k)return;$('#lg').dataset.k=k;
+  $('#lg').innerHTML=c.map(x=>`<div class=card><b>${x.name}</b><img class=cam src="/video/${x.id}"></div>`).join('')||'No cameras yet - add one in Cameras.'},
+ async inc(){const r=await J('/api/incidents');$('#it').innerHTML=r.map(i=>`<tr><td>${i.id}<td>${T(i.ts)}<td>${i.cam||'network'}<td class=${i.level}>${i.level} (${i.score})
+  <td>${R=='viewer'?i.status:`<select onchange="post('/api/incidents/${i.id}',{status:this.value})">${['Open','Investigating','Resolved','Closed'].map(s=>`<option ${s==i.status?'selected':''}>${s}</option>`).join('')}</select>`}
+  <td>${i.summary}<td>${i.shot?`<a href="/api/evidence/${i.id}/shot" target=_blank>shot</a> <a href="/api/evidence/${i.id}/clip">clip</a><br><small>sha256 ${i.sha256.slice(0,12)}…</small>`+(R!='viewer'?` <button onclick="ver(${i.id})">verify</button>`:''):'-'}</tr>`).join('')},
+ async ana(){const s=await J('/api/stats');$('#op').textContent=s.open;
+  const mk=(id,type,l,d,t)=>{ch[id]&&ch[id].destroy();ch[id]=new Chart($(id),{type,data:{labels:l,datasets:[{label:t,data:d,backgroundColor:['#4ade80','#facc15','#fb923c','#f87171','#60a5fa','#a78bfa','#f472b6']}]},options:{plugins:{legend:{display:type!='bar'}}}})};
+  mk('#c1','doughnut',Object.keys(s.levels),Object.values(s.levels),'Incidents by level');
+  mk('#c2','bar',Object.keys(s.types),Object.values(s.types),'Events by type');
+  mk('#c3','line',s.trend.map(x=>x.d),s.trend.map(x=>x.n),'Incidents per day');
+  $('#cs').innerHTML=s.cameras.map(c=>`<p>${c.name}: <span class=${c.status}>${c.status}</span></p>`).join('')},
+ async cam(){const c=await J('/api/cameras');$('#ct').innerHTML=c.map(x=>`<tr><td>${x.name}<td>${x.source}<td>${x.zone?'zone set':''}<td>${R=='admin'?`<button onclick="delCam(${x.id})">delete</button>`:''}</tr>`).join('');$('#addcam').style.display=R=='admin'?'':'none'},
+ async adm(){const u=await J('/api/users');$('#ut').innerHTML=u.map(x=>`<tr><td>${x.username}<td>${x.role}</tr>`).join('');
+  const a=await J('/api/audit');$('#at').innerHTML=a.map(x=>`<tr><td>${T(x.ts)}<td>${x.user}<td>${x.ip}<td>${x.action}</tr>`).join('')}};
+function show(n){cur=n;document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.id==n));L[n]()}
+async function addCam(){await post('/api/cameras',{name:$('#n').value,source:$('#s').value,zone:$('#z').value});L.cam()}
+async function delCam(i){await post('/api/cameras/'+i,{},'DELETE');$('#lg').dataset.k='';L.cam()}
+async function up(){const fd=new FormData();fd.append('file',$('#f').files[0]);await fetch('/api/upload',{method:'POST',body:fd});$('#lg').dataset.k='';L.cam()}
+async function addUser(){await post('/api/users',{username:$('#un').value,password:$('#up').value,role:$('#ur').value});L.adm()}
+async function ver(i){const r=await J('/api/verify/'+i);alert(r.intact?'Evidence intact (SHA-256 matches)':'WARNING: evidence hash mismatch!')}
+async function poll(){const r=await J('/api/incidents?limit=20');if(!Array.isArray(r))return;const m=Math.max(0,...r.map(i=>i.id));
+ if(seen!==null)r.filter(i=>i.id>seen).forEach(i=>{const d=document.createElement('div');d.textContent=`${i.level} incident #${i.id}: ${i.summary}`;$('#toast').append(d);setTimeout(()=>d.remove(),10000)});
+ seen=m;if(cur=='inc'||cur=='ana')L[cur]()}
+L.live();poll();setInterval(poll,5000);
+</script></body></html>
