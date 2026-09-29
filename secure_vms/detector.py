@@ -13,7 +13,16 @@ def _load(name, fallback=None):
         print('model load failed:', name, e); return None
 OBJ = _load('yolov8n.pt', 'yolov8n.pt')   # person/object (auto-downloads on first run)
 WEAP = _load('weapon.pt')                 # optional custom weapon detector
-CLS = _load('dcsass_cls.pt')              # YOLOv8-cls trained on DCSASS (train/train_dcsass.py)
+
+# Load the new video-based classifier
+try:
+    import dcsass_infer
+    cls_path = os.path.join(MODELS, 'dcsass_video_clf.pt')
+    CLS = dcsass_infer.DcsassPredictor(cls_path) if os.path.exists(cls_path) else None
+except Exception as e:
+    print('Failed to load video classifier:', e)
+    CLS = None
+
 print('models -> object:', bool(OBJ), '| weapon:', bool(WEAP), '| dcsass:', bool(CLS))
 FIGHT = {'fighting', 'assault', 'abuse'}; GUN = {'shooting'}; COCO_W = {'knife', 'baseball bat', 'scissors'}
 LOITER = 20  # seconds
@@ -22,6 +31,7 @@ class Detector:
     def __init__(s, zone):
         s.poly = np.array(json.loads(zone), float) if zone else None
         s.tr = {}; s.nid = 0; s.hist = collections.deque(maxlen=3)
+        s.v_buf = collections.deque(maxlen=16)
     def run(s, f):
         ev = []; h, w = f.shape[:2]; now = time.time(); persons = []; fc = f.copy()
         with LOCK:
@@ -56,9 +66,10 @@ class Detector:
             if np.hypot(t['x'] - t['x0'], t['y'] - t['y0']) > 120: t['x0'], t['y0'], t['t0'] = cx, cy, now
             if now - t['t0'] > LOITER: ev.append(('loitering', f'person #{tid} for {int(now - t["t0"])}s'))
         s.tr = {k: v for k, v in s.tr.items() if now - v['seen'] < 3}
-        if persons and CLS:  # fighting / shooting from the DCSASS classifier
-            with LOCK: c = CLS(fc, verbose=False)[0]
-            name = c.names[c.probs.top1].lower(); conf = float(c.probs.top1conf)
+        s.v_buf.append(fc)
+        if persons and CLS and len(s.v_buf) == 16:  # fighting / shooting from the DCSASS classifier
+            with LOCK: out = CLS.predict_frames(list(s.v_buf))
+            name = out['label'].lower(); conf = out['confidence']
             cv2.putText(f, f'{name} {conf:.2f}', (8, 20), 0, .6, (255, 255, 0), 2)
             s.hist.append(name if name in (FIGHT | GUN) and conf > .6 else None)
             hits = [x for x in s.hist if x]
